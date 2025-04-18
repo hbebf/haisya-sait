@@ -1,5 +1,8 @@
 // auth.js - ユーザー認証とアカウント管理のためのモジュール
 
+// API URLの設定
+const API_URL = 'https://script.google.com/macros/s/AKfycbzVB2w7YW5YbeGR4PlAbP7W_pvwKWuBZOY0I1AZxqoljb7KXnWS539mOFUWExRsQzmzWw/exec';
+
 // ユーザー認証関連の機能
 const authModule = {
     // ログインユーザー情報
@@ -7,35 +10,60 @@ const authModule = {
     
     // ログイン処理
     login(email, password) {
-        // 実際の実装ではサーバーAPIを呼び出します
+        // サーバーAPIを呼び出す実装
         return new Promise((resolve, reject) => {
-            // ダミーのユーザーデータ (実際はサーバーから取得)
-            const users = [
-                { id: 1, name: '田中太郎', email: 'tanaka@example.com', password: 'password123', type: 'provider' },
-                { id: 2, name: '山田花子', email: 'yamada@example.com', password: 'pass456', type: 'user' },
-                { id: 3, name: '佐藤一郎', email: 'sato@example.com', password: 'sato789', type: 'both' }
-            ];
-            
-            const user = users.find(u => u.email === email && u.password === password);
-            
-            if (user) {
-                // パスワードを除外したユーザー情報をセット
-                const { password, ...userData } = user;
-                this.currentUser = userData;
-                
-                // ローカルストレージに保存
-                localStorage.setItem('currentUser', JSON.stringify(userData));
-                localStorage.setItem('authToken', this.generateToken(userData));
-                
-                resolve(userData);
-            } else {
-                reject(new Error('メールアドレスまたはパスワードが正しくありません'));
-            }
+            fetch(`${API_URL}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    action: 'login',
+                    email, 
+                    password 
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('サーバーとの通信に失敗しました');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // パスワードを除外したユーザー情報をセット
+                    const userData = data.user;
+                    this.currentUser = userData;
+                    
+                    // ローカルストレージに保存
+                    localStorage.setItem('currentUser', JSON.stringify(userData));
+                    localStorage.setItem('authToken', data.token || this.generateToken(userData));
+                    
+                    resolve(userData);
+                } else {
+                    reject(new Error(data.message || 'メールアドレスまたはパスワードが正しくありません'));
+                }
+            })
+            .catch(error => {
+                console.error('Login error:', error);
+                reject(error);
+            });
         });
     },
     
     // ログアウト処理
     logout() {
+        // サーバー側でもセッションを破棄
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            fetch(`${API_URL}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    action: 'logout',
+                    token 
+                })
+            }).catch(error => console.error('Logout error:', error));
+        }
+        
         this.currentUser = null;
         localStorage.removeItem('currentUser');
         localStorage.removeItem('authToken');
@@ -48,7 +76,29 @@ const authModule = {
         
         if (userStr && token) {
             try {
-                this.currentUser = JSON.parse(userStr);
+                const userData = JSON.parse(userStr);
+                
+                // トークンの有効性をサーバーで確認
+                fetch(`${API_URL}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        action: 'validate_token',
+                        token 
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.valid) {
+                        this.logout();
+                    }
+                })
+                .catch(() => {
+                    // API通信エラーの場合はローカルデータを優先
+                    console.warn('Token validation failed, using cached data');
+                });
+                
+                this.currentUser = userData;
                 return true;
             } catch (e) {
                 this.logout();
@@ -58,42 +108,48 @@ const authModule = {
         return false;
     },
     
-    // 簡易的なトークン生成（実際の実装ではより堅牢な方法を使用）
+    // 簡易的なトークン生成（実際の実装ではサーバーから提供されるトークンを使用）
     generateToken(user) {
         return btoa(`${user.id}:${user.email}:${Date.now()}`);
     },
     
     // 新規ユーザー登録
     register(userData) {
-        // 実際の実装ではサーバーAPIを呼び出します
+        // サーバーAPIを呼び出す実装
         return new Promise((resolve, reject) => {
-            // メールアドレスの重複チェック（実際はサーバーサイドで行う）
-            const existingUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-            
-            if (existingUsers.some(u => u.email === userData.email)) {
-                reject(new Error('このメールアドレスは既に登録されています'));
-                return;
-            }
-            
-            // 新規ユーザー作成
-            const newUser = {
-                ...userData,
-                id: Date.now() // 仮のID生成
-            };
-            
-            // パスワードはハッシュ化するべきだが、クライアントサイドのデモなので省略
-            
-            // 登録ユーザーリストに追加（実際はデータベースに保存）
-            existingUsers.push(newUser);
-            localStorage.setItem('registeredUsers', JSON.stringify(existingUsers));
-            
-            // ログイン情報として保存
-            const { password, ...userDataWithoutPassword } = newUser;
-            this.currentUser = userDataWithoutPassword;
-            localStorage.setItem('currentUser', JSON.stringify(userDataWithoutPassword));
-            localStorage.setItem('authToken', this.generateToken(userDataWithoutPassword));
-            
-            resolve(userDataWithoutPassword);
+            fetch(`${API_URL}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'register',
+                    userData
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('サーバーとの通信に失敗しました');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // パスワードを除外したユーザー情報
+                    const registeredUser = data.user;
+                    
+                    // ログイン情報として保存
+                    this.currentUser = registeredUser;
+                    localStorage.setItem('currentUser', JSON.stringify(registeredUser));
+                    localStorage.setItem('authToken', data.token || this.generateToken(registeredUser));
+                    
+                    resolve(registeredUser);
+                } else {
+                    reject(new Error(data.message || 'ユーザー登録に失敗しました'));
+                }
+            })
+            .catch(error => {
+                console.error('Registration error:', error);
+                reject(error);
+            });
         });
     },
     
@@ -105,21 +161,46 @@ const authModule = {
                 return;
             }
             
-            // 現在のユーザー情報とマージ
-            const updatedUser = { ...this.currentUser, ...userData };
-            this.currentUser = updatedUser;
+            const token = localStorage.getItem('authToken');
             
-            // ローカルストレージを更新
-            localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-            
-            // 登録ユーザーリストも更新（実際はデータベース）
-            const existingUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-            const updatedUsers = existingUsers.map(user => 
-                user.id === updatedUser.id ? { ...user, ...userData } : user
-            );
-            localStorage.setItem('registeredUsers', JSON.stringify(updatedUsers));
-            
-            resolve(updatedUser);
+            fetch(`${API_URL}`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    action: 'update_profile',
+                    userId: this.currentUser.id,
+                    userData
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('サーバーとの通信に失敗しました');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // 更新されたユーザー情報
+                    const updatedUser = data.user;
+                    
+                    // 現在のユーザー情報を更新
+                    this.currentUser = updatedUser;
+                    
+                    // ローカルストレージを更新
+                    localStorage.setItem('currentUser', JSON.stringify(updatedUser));
+                    
+                    resolve(updatedUser);
+                } else {
+                    reject(new Error(data.message || 'プロフィール更新に失敗しました'));
+                }
+            })
+            .catch(error => {
+                console.error('Profile update error:', error);
+                reject(error);
+            });
         });
     }
 };
@@ -455,9 +536,6 @@ function addAccountSettingsSection() {
                 showFormError('profile-form', 'パスワードは6文字以上で設定してください');
                 return;
             }
-            
-            // 現在のパスワードが正しいか確認（実際はサーバーサイドで行う）
-            // ここではダミーチェック
         }
         
         // ユーザー情報の更新
@@ -469,7 +547,8 @@ function addAccountSettingsSection() {
             };
             
             if (newPassword) {
-                updatedData.password = newPassword;
+                updatedData.currentPassword = currentPassword;
+                updatedData.newPassword = newPassword;
             }
             
             const updatedUser = await authModule.updateUserProfile(updatedData);
@@ -564,5 +643,5 @@ function addCustomStyles() {
     document.head.appendChild(styleElement);
 }
 
-// スタイルを追加
-addCustomStyles();
+// ページ読み込み時にスタイルを追加
+document.addEventListener('DOMContentLoaded', addCustomStyles);
